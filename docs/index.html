@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcripteur audio</title>
+<meta name="description" content="Transcrivez vos enregistrements audio et vidéo en texte, directement dans le navigateur, sans rien envoyer sur Internet.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>">
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1d2026; --muted: #646b78; --border: #e2e5ea;
+    --accent: #2f6fed; --accent-text: #ffffff; --accent-soft: #e8effd;
+    --ok: #157f4a; --ok-soft: #e6f5ec; --warn: #9a5b00; --warn-soft: #fff4e0; --err: #b42318;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111318; --card: #1a1d24; --text: #e9ebef; --muted: #9aa2b1; --border: #2b303a;
+            --accent: #6f9cff; --accent-text: #0d1220; --accent-soft: #1c2840;
+            --ok: #5fd39a; --ok-soft: #14291f; --warn: #ffbf5c; --warn-soft: #2d2412; --err: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 36px 16px 80px; }
+  h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 18px; margin: 0 0 14px; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px; margin-bottom: 18px; }
+  .step { display: inline-flex; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+          font-weight: 700; font-size: 14px; align-items: center; justify-content: center; margin-right: 8px; }
+  ul.caps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  ul.caps li { padding: 10px 12px; border-radius: 10px; font-size: 15px; }
+  ul.caps li.ok { background: var(--ok-soft); color: var(--ok); }
+  ul.caps li.ok::before { content: "✓ "; font-weight: 700; }
+  ul.caps li.warn { background: var(--warn-soft); color: var(--warn); }
+  ul.caps li.warn::before { content: "⚠️ "; }
+  ul.caps li.info { background: var(--accent-soft); color: var(--text); }
+  .drop { display: block; width: 100%; border: 2px dashed var(--border); border-radius: 12px; padding: 30px 16px; text-align: center;
+          cursor: pointer; transition: border-color .15s, background .15s; background: transparent; color: inherit; font: inherit; }
+  .drop:hover, .drop.over, .drop:focus-visible { border-color: var(--accent); background: var(--accent-soft); outline: none; }
+  .drop .big { font-size: 34px; display: block; }
+  .drop strong { display: block; font-size: 17px; overflow-wrap: anywhere; }
+  .drop small { color: var(--muted); }
+  .drop.has-file { border-style: solid; }
+  .grid { display: grid; gap: 10px; }
+  .choice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; }
+  .choice:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .choice.disabled { opacity: .5; cursor: not-allowed; }
+  .choice input { margin-top: 5px; accent-color: var(--accent); }
+  .choice small { display: block; color: var(--muted); font-size: 14px; }
+  .tag { font-style: normal; font-size: 12px; background: var(--accent); color: var(--accent-text); border-radius: 99px; padding: 1px 8px; margin-left: 4px; vertical-align: 1px; }
+  label.field { display: block; font-size: 14px; color: var(--muted); margin: 16px 0 6px; }
+  select { width: 100%; padding: 10px; font: inherit; border-radius: 10px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; font-size: 15px; cursor: pointer; }
+  .check input { margin-top: 4px; accent-color: var(--accent); }
+  .check small { display: block; color: var(--muted); }
+  .resume { margin-top: 14px; padding: 12px 14px; background: var(--warn-soft); border-radius: 10px; }
+  button { font: inherit; cursor: pointer; border-radius: 10px; border: 0; }
+  .primary { width: 100%; margin-top: 18px; padding: 14px; background: var(--accent); color: var(--accent-text); font-size: 17px; font-weight: 650; }
+  .primary:disabled { opacity: .45; cursor: default; }
+  .secondary { padding: 9px 14px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .small { padding: 5px 10px; font-size: 13px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .stage { font-weight: 650; font-size: 17px; }
+  .bar { height: 10px; background: var(--border); border-radius: 99px; overflow: hidden; margin: 12px 0 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .5s ease; }
+  .meta { color: var(--muted); font-size: 14px; }
+  .pct { font-variant-numeric: tabular-nums; font-weight: 700; }
+  .live { margin-top: 14px; max-height: 260px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: 15px; background: var(--bg); }
+  .live:empty::before { content: "Le texte apparaîtra ici au fur et à mesure…"; color: var(--muted); }
+  .live p { margin: 0 0 6px; }
+  .live time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; margin-right: 4px; }
+  .tips { font-size: 14px; color: var(--muted); margin: 14px 0 0; padding-left: 18px; }
+  .notice { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--warn-soft); color: var(--warn); font-size: 15px; }
+  .result-text { white-space: pre-wrap; max-height: 360px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-top: 14px; font-size: 15px; }
+  ul.history { list-style: none; margin: 0; padding: 0; }
+  ul.history li { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--border); flex-wrap: wrap; }
+  ul.history li:first-child { border-top: 0; }
+  ul.history strong { display: block; overflow-wrap: anywhere; }
+  ul.history small { color: var(--muted); }
+  details { border-top: 1px solid var(--border); padding: 12px 0; }
+  details:first-of-type { border-top: 0; padding-top: 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p, details ol { color: var(--muted); font-size: 15px; margin: 8px 0 0; }
+  a { color: var(--accent); }
+  .debug { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); margin-top: 10px; }
+  footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 30px; }
+  body.running #setup { opacity: .55; pointer-events: none; }
+  body:not(.ready) #start { visibility: hidden; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎙️ Transcripteur audio</h1>
+  <p class="lead">Transformez un enregistrement (jusqu'à 3 h) en texte, avec détection automatique de la langue.
+    <strong>Tout se passe sur votre ordinateur</strong> : vos fichiers ne sont envoyés nulle part.</p>
+
+  <section class="card">
+    <h2>Votre ordinateur</h2>
+    <ul class="caps" id="caps"><li class="info">Vérification de votre navigateur…</li></ul>
+  </section>
+
+  <div id="setup">
+    <section class="card">
+      <h2><span class="step">1</span>Choisissez un fichier</h2>
+      <button type="button" class="drop" id="drop">
+        <span class="big">📂</span>
+        <strong id="fileName">Glissez un fichier audio ou vidéo ici</strong>
+        <small id="fileMeta">ou cliquez pour le choisir : MP3, M4A, WAV, MP4, MOV…</small>
+      </button>
+      <input type="file" id="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.opus,.flac,.mp4,.mov,.webm,.mkv" hidden>
+      <div class="resume" id="resume" hidden>
+        <label class="check"><input type="checkbox" id="resumeCheck" checked><span id="resumeText"></span></label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="step">2</span>Réglages</h2>
+      <div class="grid" id="models"></div>
+      <label class="field" for="language">Langue parlée</label>
+      <select id="language">
+        <option value="auto" selected>Détection automatique</option>
+        <option value="fr">Français</option>
+        <option value="en">Anglais</option>
+        <option value="es">Espagnol</option>
+        <option value="it">Italien</option>
+        <option value="de">Allemand</option>
+        <option value="pt">Portugais</option>
+        <option value="nl">Néerlandais</option>
+        <option value="ar">Arabe</option>
+        <option value="tr">Turc</option>
+        <option value="ru">Russe</option>
+        <option value="uk">Ukrainien</option>
+        <option value="pl">Polonais</option>
+        <option value="ro">Roumain</option>
+        <option value="el">Grec</option>
+        <option value="zh">Chinois</option>
+        <option value="ja">Japonais</option>
+        <option value="ko">Coréen</option>
+        <option value="vi">Vietnamien</option>
+        <option value="hi">Hindi</option>
+        <option value="fa">Persan</option>
+        <option value="he">Hébreu</option>
+        <option value="sv">Suédois</option>
+      </select>
+      <label class="check"><input type="checkbox" id="multilingual">
+        <span>L'enregistrement mélange plusieurs langues<small>La langue est alors détectée toutes les 30 secondes (un peu plus lent).</small></span></label>
+      <button class="primary" id="start" disabled>Lancer la transcription</button>
+    </section>
+  </div>
+
+  <section class="card" id="progressCard" hidden>
+    <h2><span class="step">3</span>Transcription</h2>
+    <div class="row" style="justify-content: space-between">
+      <span class="stage" id="stage">Préparation…</span>
+      <span class="pct" id="pct">0 %</span>
+    </div>
+    <div class="bar"><div id="bar"></div></div>
+    <div class="meta" id="detail"></div>
+    <div class="meta" id="langInfo"></div>
+    <div class="notice" id="hiddenWarning" hidden>Gardez cet onglet affiché au premier plan : le navigateur ralentit les onglets cachés.</div>
+    <div class="notice" id="notice" hidden></div>
+    <div class="live" id="live" aria-live="polite"></div>
+    <ul class="tips">
+      <li>Laissez cet onglet ouvert et visible, et le Mac <strong>branché sur secteur</strong>.</li>
+      <li>Si la page se ferme, rechoisissez le même fichier : la transcription reprendra où elle s'était arrêtée.</li>
+    </ul>
+    <div class="row" style="margin-top: 14px"><button class="secondary ghost" id="cancel">Arrêter</button></div>
+    <div class="debug" id="debug" hidden></div>
+  </section>
+
+  <section class="card" id="result" hidden>
+    <h2>✅ Résultat</h2>
+    <div class="meta" id="resultMeta"></div>
+    <div class="row" style="margin-top: 14px">
+      <button class="secondary" id="dl-txt">Texte (.txt)</button>
+      <button class="secondary" id="dl-srt">Sous-titres (.srt)</button>
+      <button class="secondary" id="dl-vtt">Sous-titres (.vtt)</button>
+      <button class="secondary ghost" id="dl-json">Données (.json)</button>
+      <button class="secondary ghost" id="copy">Copier le texte</button>
+    </div>
+    <div class="result-text" id="resultText"></div>
+  </section>
+
+  <section class="card" id="historyCard" hidden>
+    <h2>Transcriptions précédentes</h2>
+    <p class="meta" style="margin-top: -6px">Gardées uniquement dans ce navigateur, sur ce Mac.</p>
+    <ul class="history" id="history"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Questions fréquentes</h2>
+    <details>
+      <summary>Combien de temps ça prend ?</summary>
+      <p>Sur un Mac avec puce Apple (M1 à M4) et Google Chrome, le mode « Haute précision » transcrit environ 3 à 8 fois plus vite que la durée de l'audio : 3 h d'enregistrement prennent environ 25 min à 1 h. La première fois, il faut aussi télécharger le modèle (≈ 1,6 Go), ensuite il est gardé sur le Mac. Le temps restant s'affiche après quelques minutes.</p>
+    </details>
+    <details>
+      <summary>Mon Mac est trop lent ou c'est un ancien Mac Intel</summary>
+      <p>Utilisez la version <a id="colab" href="#" target="_blank" rel="noopener">Google Colab</a> : un ordinateur de Google, gratuit et équipé d'une carte graphique, fait le calcul (environ 15 à 25 min pour 3 h d'audio). Il faut un compte Google ; les étapes sont expliquées dans la page.</p>
+      <p>Autre option : l'application gratuite et open source <a href="https://github.com/chidiwilliams/buzz" target="_blank" rel="noopener">Buzz</a>, à installer sur le Mac.</p>
+    </details>
+    <details>
+      <summary>Safari ou Chrome ?</summary>
+      <p><strong>Google Chrome est conseillé.</strong> Safari n'utilise la carte graphique qu'à partir de macOS Tahoe, et il recharge parfois les pages qui utilisent beaucoup de mémoire.</p>
+    </details>
+    <details>
+      <summary>Mes fichiers sont-ils envoyés quelque part ?</summary>
+      <p>Non. La page télécharge seulement le modèle de reconnaissance vocale open source (Whisper d'OpenAI) depuis Hugging Face. Ensuite, tout le calcul se fait sur votre Mac. Les transcriptions sont gardées dans ce navigateur jusqu'à ce que vous les supprimiez.</p>
+    </details>
+    <details>
+      <summary>Comment avoir de meilleurs résultats ?</summary>
+      <ol>
+        <li>Choisissez la langue au lieu de « Détection automatique » si vous la connaissez.</li>
+        <li>Préférez le mode « Haute précision ».</li>
+        <li>Un enregistrement proche des personnes qui parlent, avec peu de bruit de fond, donne un bien meilleur texte.</li>
+      </ol>
+    </details>
+  </section>
+
+  <footer>Modèles <a href="https://github.com/openai/whisper" target="_blank" rel="noopener">Whisper</a> (OpenAI, licence MIT), exécutés avec <a href="https://github.com/huggingface/transformers.js" target="_blank" rel="noopener">Transformers.js</a>.
+    · <a id="colab2" href="#" target="_blank" rel="noopener">Version Google Colab</a></footer>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
