@@ -24,6 +24,8 @@ let eof = false;
 let recoveries = 0;
 let damaged = false;
 let trackStart = 0; // début de la piste sur l'horloge du fichier
+let truncation = null; // instant (s, depuis le début) où la lecture a dû s'arrêter
+let strict = false; // vrai : s'arrêter à la première zone abîmée (la page a un décodeur de secours)
 let mono = new Float32Array(0);
 let plane = new Float32Array(0);
 
@@ -76,8 +78,10 @@ function startIterator(fromTime) {
   iterator = sink.samples(fromTime)[Symbol.asyncIterator]();
 }
 
-async function open(file, startSec) {
+async function open(file, startSec, strictMode = false) {
   close();
+  strict = strictMode;
+  truncation = null;
   const { inp, track, error } = await openTrack(file);
   if (error) { inp.dispose(); throw new Error(error); }
   input = inp;
@@ -133,7 +137,6 @@ async function pull(seconds) {
   const want = Math.round(seconds * SR);
   const parts = [carry];
   let have = carry.length;
-  let truncatedAt = null;
   damaged = false;
   while (have < want && !eof) {
     let next;
@@ -141,14 +144,15 @@ async function pull(seconds) {
       next = await iterator.next();
     } catch (err) {
       console.warn("Passage illisible", cursor, err);
-      if (recover()) continue;
-      next = { done: true };
+      if (strict) { truncation = cursor - trackStart; next = { done: true, stop: true }; }
+      else if (recover()) continue;
+      else next = { done: true };
     }
     if (next.done) {
       // La piste s'arrête bien avant la fin annoncée : demuxeur bloqué sur une zone abîmée.
-      if (trackEnd != null && trackEnd - cursor > 2) {
-        if (recover()) continue;
-        truncatedAt = cursor - trackStart; // impossible d'aller plus loin
+      if (!next.stop && trackEnd != null && trackEnd - cursor > 2) {
+        if (!strict && recover()) continue;
+        truncation = cursor - trackStart; // impossible d'aller plus loin
       }
       eof = true;
       if (resampler) { const tail = resampler.flush(); parts.push(tail); have += tail.length; resampler = null; }
@@ -186,7 +190,8 @@ async function pull(seconds) {
   const all = concatAll(parts);
   const pcm = all.length > want ? all.slice(0, want) : all;
   carry = all.length > want ? all.slice(want) : new Float32Array(0);
-  return { pcm, eof: eof && carry.length === 0, damaged, truncatedAt: carry.length ? null : truncatedAt };
+  const finished = eof && carry.length === 0;
+  return { pcm, eof: finished, damaged, truncatedAt: finished ? truncation : null };
 }
 
 self.onmessage = async ({ data }) => {
@@ -194,7 +199,7 @@ self.onmessage = async ({ data }) => {
   try {
     let result;
     if (type === "probe") result = await probe(data.file);
-    else if (type === "open") result = await open(data.file, data.startSec || 0);
+    else if (type === "open") result = await open(data.file, data.startSec || 0, data.strict);
     else if (type === "pull") {
       result = await pull(data.seconds);
       self.postMessage({ id, ok: true, result }, [result.pcm.buffer]);

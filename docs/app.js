@@ -11,6 +11,8 @@ const DEBUG = params.has("debug");
 const RECYCLE_WINDOWS = Number(params.get("recycle")) || 60; // ~30 min d'audio par worker
 // Délai max. d'une fenêtre avant de considérer le moteur bloqué : large au début,
 // puis 8 fois la durée moyenne observée (jamais moins de 5 min).
+// Taille maximale pour le décodage complet de secours (au-delà, risque de saturer la mémoire).
+const WHOLE_FALLBACK_MAX = 300 * 1048576;
 const windowTimeout = (avgMs) => (avgMs ? Math.max(5 * 60e3, 8 * avgMs) : 30 * 60e3);
 const COLAB_URL =
   "https://colab.research.google.com/github/quentin91590/Translate/blob/claude/admiring-cray-dmxzoy/notebooks/transcription_colab.ipynb";
@@ -87,8 +89,14 @@ class WorkerClient {
 
 /** Lecture en flux par le worker de décodage (WebCodecs). Mémoire constante. */
 class StreamSource {
-  constructor(file) { this.file = file; this.client = new WorkerClient("./decoder-worker.js"); }
-  open(startSec) { return this.client.call("open", { file: this.file, startSec }); }
+  /** `strict` : s'arrêter à la première zone abîmée au lieu de la sauter (la page bascule alors
+   *  sur le décodeur du navigateur, qui ne perd presque rien). */
+  constructor(file, { strict = false } = {}) {
+    this.file = file;
+    this.strict = strict;
+    this.client = new WorkerClient("./decoder-worker.js");
+  }
+  open(startSec) { return this.client.call("open", { file: this.file, startSec, strict: this.strict }); }
   pull(seconds) { return this.client.call("pull", { seconds }); }
   close() { this.client.terminate(); }
 }
@@ -479,7 +487,8 @@ async function run() {
     // 1. Ouverture du fichier
     setStage("Lecture du fichier audio…");
     if (info.path === "stream") {
-      source = new StreamSource(file);
+      // Fichiers raisonnables : en cas de zone abîmée, le décodeur du navigateur prendra le relais.
+      source = new StreamSource(file, { strict: file.size < WHOLE_FALLBACK_MAX });
     } else {
       setProgress(0, "Décodage complet du fichier (peut prendre une minute)…");
       source = await WholeSource.create(file);
@@ -497,28 +506,31 @@ async function run() {
         buffer.append(pcm);
         eof = done;
         if (truncatedAt != null && source instanceof StreamSource) {
-          // Zone abîmée que la lecture en flux ne sait pas franchir : on bascule sur le
-          // décodeur intégré du navigateur, plus tolérant, à partir du même endroit.
           const at = buffer.end / SR;
-          notice(`Une zone abîmée du fichier (vers ${clock(at)}) est contournée…`);
-          try {
-            const whole = await WholeSource.create(file);
-            checkCancel();
-            await whole.open(at);
+          if (source.strict) {
+            // Zone abîmée : on bascule sur le décodeur intégré du navigateur, plus tolérant,
+            // à partir du même endroit ; à défaut, on reprend la lecture en flux en sautant la zone.
+            notice(`Une zone abîmée du fichier (vers ${clock(at)}) est contournée…`);
             source.close();
-            source = whole;
-            duration = duration || whole.duration;
-            eof = whole.pos >= whole.data.length;
-            notice(`Une zone abîmée du fichier (vers ${clock(at)}) a été contournée.`);
-          } catch (err) {
-            if (state.cancel) throw err;
-            console.warn("Décodage de secours impossible", err);
+            try {
+              source = await WholeSource.create(file);
+              notice(`Une zone abîmée du fichier (vers ${clock(at)}) a été contournée.`);
+            } catch (err) {
+              if (state.cancel) throw err;
+              console.warn("Décodage de secours impossible", err);
+              source = new StreamSource(file);
+              notice(`Une zone abîmée du fichier (vers ${clock(at)}) a été sautée.`);
+            }
+            checkCancel();
+            await source.open(at);
+            eof = false;
+          } else {
             truncated = at;
             notice(`Le fichier est abîmé à partir de ${clock(at)} : la transcription s'arrête là. Essayez de le convertir en MP3 ou WAV.`);
           }
         } else if (damaged && !damagedWarned) {
           damagedWarned = true;
-          notice("Un court passage abîmé du fichier a été sauté.");
+          notice("Un passage abîmé du fichier a été sauté (silence à la place).");
         }
       }
     };
