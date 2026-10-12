@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Banc mémoire GPU</title>
+<pre id="out">…</pre>
+<script type="module">
+// Appelle le worker de reconnaissance N fois sur le même extrait et relève la mémoire GPU
+// encore allouée après chaque appel. Paramètres : ?model=&dtype=&n=&pcm=&noleakfix
+const q = new URLSearchParams(location.search);
+const out = document.getElementById("out");
+const w = new Worker("/docs/asr-worker.js", { type: "module" });
+let seq = 0;
+const pending = new Map();
+w.onmessage = ({ data }) => {
+  if (data.id == null) return;
+  const p = pending.get(data.id); pending.delete(data.id);
+  data.ok ? p.resolve(data.result) : p.reject(new Error(data.error));
+};
+const call = (type, payload) => new Promise((resolve, reject) => {
+  const id = ++seq; pending.set(id, { resolve, reject }); w.postMessage({ id, type, ...payload });
+});
+window.report = { done: false, series: [] };
+try {
+  const pcm = new Float32Array(await (await fetch(q.get("pcm"))).arrayBuffer());
+  const loaded = await call("load", { model: q.get("model"), device: "webgpu", dtype: q.get("dtype") || "q8", debug: true, leakFix: !q.has("noleakfix") });
+  window.report.afterLoad = loaded.gpu;
+  for (let i = 0; i < Number(q.get("n") || 4); i++) {
+    const r = await call("transcribe", { pcm, language: "fr" });
+    window.report.series.push({ gpu: r.gpu, ms: Math.round(r.ms), text: r.text });
+    out.textContent = JSON.stringify(window.report, null, 1);
+  }
+} catch (e) {
+  window.report.error = String(e);
+}
+window.report.done = true;
+out.textContent = JSON.stringify(window.report, null, 1);
+</script>

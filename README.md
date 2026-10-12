@@ -1,6 +1,64 @@
 # Transcripteur audio
 
-Application web et en ligne de commande pour **transcrire de longs enregistrements audio ou vidéo (jusqu'à ~3 h)** en texte, avec **détection automatique de la langue**, en utilisant uniquement des **modèles open source qui tournent sur votre machine**. Aucun fichier n'est envoyé à un service externe.
+Application pour **transcrire de longs enregistrements audio ou vidéo (jusqu'à ~3 h)** en texte, avec **détection automatique de la langue**, en utilisant uniquement des **modèles open source qui tournent sur votre machine**. Aucun fichier n'est envoyé à un service externe.
+
+Trois façons de l'utiliser :
+
+| | Pour qui | Où tourne le calcul |
+|---|---|---|
+| **Page web** (`docs/`, publiée sur GitHub Pages) | N'importe qui, sans rien installer : idéal sur un Mac avec puce Apple | Dans le navigateur, sur la carte graphique du Mac |
+| **Google Colab** (`notebooks/transcription_colab.ipynb`) | Mac trop lent ou ancien Mac Intel | Sur un GPU gratuit de Google |
+| **Serveur Python** (`transcriber/`) | Un PC avec une carte NVIDIA, ou un serveur | Sur la machine qui héberge le serveur |
+
+## Page web (GitHub Pages)
+
+La page `docs/index.html` fait tourner **Whisper directement dans le navigateur** grâce à [Transformers.js](https://github.com/huggingface/transformers.js) et WebGPU. Rien n'est installé et aucun fichier audio ne quitte l'ordinateur. Le modèle est téléchargé une seule fois depuis Hugging Face, puis gardé en cache.
+
+### Mise en ligne (une seule fois)
+
+1. Sur GitHub : **Settings → Pages**.
+2. **Source** : « Deploy from a branch ». **Branch** : `claude/admiring-cray-dmxzoy`, dossier **`/docs`**, puis **Save**.
+3. Après 1 à 2 minutes, la page est en ligne sur **https://quentin91590.github.io/Translate/**.
+
+Si le dossier `/ (root)` est choisi à la place de `/docs`, la racine redirige automatiquement vers `docs/`.
+
+### Ce qu'il faut savoir côté Mac
+
+| Mac | Navigateur | Mode conseillé | 3 h d'audio (ordre de grandeur) |
+|---|---|---|---|
+| Puce Apple (M1 à M4), 16 Go de RAM ou plus | **Google Chrome** | Haute précision (Whisper large-v3 turbo) | de 30 min (puces récentes Pro/Max) à 2–3 h (M1) |
+| Puce Apple, 8 Go de RAM | Google Chrome | Équilibré (Whisper small) | 30 min à 1 h |
+| Mac Intel | Google Chrome | Équilibré, ou **Google Colab** | plusieurs heures dans le navigateur, 15 à 25 min sur Colab |
+
+- **Chrome plutôt que Safari** : Safari n'utilise la carte graphique qu'à partir de macOS Tahoe (26), et il recharge parfois les pages qui consomment beaucoup de mémoire.
+- **Téléchargement du modèle** : environ 1,6 Go pour « Haute précision », 600 Mo pour « Équilibré », 200 Mo pour « Rapide », la première fois seulement.
+- **Pendant la transcription**, garder l'onglet affiché et le Mac branché. La page empêche la mise en veille de l'écran.
+- **Si la page se ferme**, il suffit de rechoisir le même fichier : la transcription reprend où elle s'était arrêtée.
+
+### Fonctionnement technique
+
+- **Décodage en flux** : le fichier est lu avec [Mediabunny](https://mediabunny.dev) (WebCodecs) et rééchantillonné à la volée en 16 kHz mono. La mémoire reste constante ; décoder 3 h d'un coup demanderait plusieurs Go.
+- **Fenêtres de 30 s** avec la méthode « seek » d'OpenAI : une phrase coupée en fin de fenêtre est reprise au début de la suivante.
+- **Silence et hallucinations** : les fenêtres silencieuses sont sautées, et les génériques inventés par Whisper (« Sous-titres réalisés par… ») ainsi que les boucles de répétition sont filtrés.
+- **Détection de la langue** : Transformers.js 4.3.1 ne la fait pas (sans langue, il transcrit en anglais). La page interroge donc le modèle sur les jetons de langue, à partir des 3 passages les plus parlés des 5 premières minutes.
+- **Fuite de mémoire GPU** de Transformers.js 4.3.1 avec Whisper ([transformers.js#1739](https://github.com/huggingface/transformers.js/issues/1739)) : elle est corrigée à l'exécution dans `docs/asr-worker.js`. Par sécurité, le moteur est aussi recréé toutes les 30 min d'audio.
+- **Sauvegarde** : la progression est enregistrée dans IndexedDB après chaque fenêtre. Les transcriptions terminées restent disponibles dans la page.
+
+Ces durées sont des estimations tirées de mesures publiées. La page affiche le vrai temps restant après quelques minutes et propose un mode plus léger si le Mac est trop lent.
+
+### Tests de la page web
+
+```bash
+node --test tests/web/core.test.mjs          # logique pure (fenêtres, filtres, rééchantillonnage, formats)
+# Bout en bout dans Chromium avec un vrai modèle (fichiers servis localement) :
+MODEL_DIR=… ORT_DIST=… TJS_DIST=… AUDIO=reunion.mp3 node tests/web/e2e.mjs
+```
+
+Paramètres d'URL de diagnostic : `?debug=1` affiche le temps par fenêtre et la mémoire GPU, `?device=wasm` force le processeur, `?model=<id>&dtype=<q8|fp32…>` change de modèle.
+
+---
+
+## Serveur Python
 
 ## Modèles
 
