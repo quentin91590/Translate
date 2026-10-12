@@ -89,3 +89,13 @@ def test_unreadable_file(tmp_path):
     bad.write_bytes(b"not audio")
     with pytest.raises(audio.AudioError):
         audio.probe_duration(bad)
+
+
+def test_backend_cache_key_follows_model_settings():
+    from transcriber.backends import _cache_key
+    from transcriber.config import Settings
+
+    a = _cache_key("whisper", Settings(whisper_model="large-v3"))
+    b = _cache_key("whisper", Settings(whisper_model="large-v3-turbo"))
+    assert a != b
+    assert a == _cache_key("whisper", Settings(whisper_model="large-v3"))

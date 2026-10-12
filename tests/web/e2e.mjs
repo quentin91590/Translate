@@ -106,11 +106,12 @@ if (process.env.SCENARIO === "resume") {
   await page.click("#cancel");
   await page.waitForFunction(() => !document.body.classList.contains("running"), null, { timeout: 120000 });
   const before = await page.locator("#live p").count();
-  await page.setInputFiles("#file", []);
-  await page.setInputFiles("#file", AUDIO);
+  // Comme un vrai utilisateur : on reclique directement sur « Lancer » (sans rechoisir le fichier).
   await page.waitForFunction(() => !document.getElementById("resume").hidden, null, { timeout: 30000 });
   resumeInfo = { stageAfterCancel: await page.locator("#stage").innerText(), linesBefore: before, resumeText: await page.locator("#resumeText").innerText() };
   await page.click("#start");
+  await page.waitForFunction(() => document.querySelectorAll("#live p").length > 0, null, { timeout: 60000 });
+  resumeInfo.firstLineAfterResume = await page.locator("#live p").first().innerText();
 }
 
 let langFixInfo = null;

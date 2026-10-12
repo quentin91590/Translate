@@ -65,7 +65,11 @@ class WhisperBackend(Backend):
             language_detection_segments=4,
         )
         if self.batched is not None:
-            segments_iter, info = self.batched.transcribe(str(wav_path), batch_size=16, **options)
+            # without_timestamps=False : sinon le mode par lots renvoie un seul segment par
+            # bloc de 30 s, et les sous-titres deviennent illisibles.
+            segments_iter, info = self.batched.transcribe(
+                str(wav_path), batch_size=16, without_timestamps=False, **options
+            )
         else:
             segments_iter, info = self.model.transcribe(str(wav_path), **options)
 

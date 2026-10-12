@@ -175,7 +175,7 @@
     <div class="live" id="live" aria-live="polite"></div>
     <ul class="tips">
       <li>Laissez cet onglet ouvert et visible, et le Mac <strong>branché sur secteur</strong>.</li>
-      <li>Si la page se ferme, rechoisissez le même fichier : la transcription reprendra où elle s'était arrêtée.</li>
+      <li>Si la page se ferme, rouvrez-la et rechoisissez le même fichier : la transcription reprendra où elle s'était arrêtée.</li>
     </ul>
     <div class="row" style="margin-top: 14px"><button class="secondary ghost" id="cancel">Arrêter</button></div>
     <div class="debug" id="debug" hidden></div>
@@ -196,7 +196,7 @@
 
   <section class="card" id="historyCard" hidden>
     <h2>Transcriptions précédentes</h2>
-    <p class="meta" style="margin-top: -6px">Gardées uniquement dans ce navigateur, sur ce Mac.</p>
+    <p class="meta" style="margin-top: -6px">Gardées uniquement dans ce navigateur, sur ce Mac. Pensez à télécharger celles que vous voulez conserver.</p>
     <ul class="history" id="history"></ul>
   </section>
 
@@ -204,7 +204,7 @@
     <h2>Questions fréquentes</h2>
     <details>
       <summary>Combien de temps ça prend ?</summary>
-      <p>Sur un Mac avec puce Apple et Google Chrome, en mode « Haute précision », comptez pour 3 h d'audio environ 30 min sur les puces récentes (M3/M4 Pro ou Max) et jusqu'à 2 ou 3 h sur un M1. Le mode « Équilibré » va environ deux fois plus vite. La première fois, il faut aussi télécharger le modèle (≈ 1,6 Go), qui reste ensuite sur le Mac. Le vrai temps restant s'affiche après quelques minutes.</p>
+      <p>Sur un Mac avec puce Apple et Google Chrome, en mode « Haute précision », comptez pour 3 h d'audio environ 30 min sur les puces récentes (M3/M4 Pro ou Max) et jusqu'à 2 ou 3 h sur un M1. Le mode « Équilibré » va environ deux fois plus vite. La première fois, il faut aussi télécharger le modèle (≈ 1,6 Go), qui reste ensuite sur le Mac (avec Safari, seulement si la page est ouverte au moins une fois par semaine). Le vrai temps restant s'affiche après quelques minutes.</p>
     </details>
     <details>
       <summary>Mon Mac est trop lent ou c'est un ancien Mac Intel</summary>
@@ -217,7 +217,7 @@
     </details>
     <details>
       <summary>Mes fichiers sont-ils envoyés quelque part ?</summary>
-      <p>Non. La page télécharge seulement le modèle de reconnaissance vocale open source (Whisper d'OpenAI) depuis Hugging Face. Ensuite, tout le calcul se fait sur votre Mac. Les transcriptions sont gardées dans ce navigateur jusqu'à ce que vous les supprimiez.</p>
+      <p>Non. La page télécharge seulement le modèle de reconnaissance vocale open source (Whisper d'OpenAI) depuis Hugging Face. Ensuite, tout le calcul se fait sur votre Mac. Les transcriptions sont gardées dans ce navigateur, mais <strong>téléchargez toujours le résultat</strong> : Safari efface ces données si la page n'est pas ouverte pendant environ une semaine.</p>
     </details>
     <details>
       <summary>Comment avoir de meilleurs résultats ?</summary>

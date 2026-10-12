@@ -61,6 +61,7 @@ class WorkerClient {
     this.worker.onerror = (e) => this.failAll(new Error(e.message || "Le moteur s'est arrêté."));
   }
   call(type, payload = {}, transfer = [], timeoutMs = 0) {
+    if (this.dead) return Promise.reject(new Error("CANCELLED"));
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
       const timer = timeoutMs ? setTimeout(() => {
@@ -76,6 +77,7 @@ class WorkerClient {
     this.pending.clear();
   }
   terminate() {
+    this.dead = true;
     this.worker.terminate();
     this.failAll(new Error("CANCELLED"));
   }
@@ -97,7 +99,7 @@ class WholeSource {
     const ctx = new OfflineAudioContext(1, 1, SR);
     const buf = await ctx.decodeAudioData(await file.arrayBuffer());
     const n = buf.length, ch = buf.numberOfChannels;
-    const mono = new Float32Array(buf.getChannelData(0));
+    const mono = buf.getChannelData(0); // moyenne faite en place : pas de copie de plusieurs centaines de Mo
     for (let c = 1; c < ch; c++) {
       const d = buf.getChannelData(c);
       for (let i = 0; i < n; i++) mono[i] += d[i];
@@ -131,6 +133,8 @@ const store = {
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
+    this.db.onclose = () => { this.db = null; };
+    this.db.onversionchange = () => { this.db?.close(); this.db = null; };
     return this.db;
   },
   async tx(mode, fn) {
@@ -141,9 +145,12 @@ const store = {
         const r = fn(t.objectStore("jobs"));
         t.oncomplete = () => resolve(r?.result);
         t.onerror = () => reject(t.error);
+        t.onabort = () => reject(t.error || new DOMException("Transaction annulée", "AbortError"));
       });
     } catch (e) {
       console.warn("Sauvegarde indisponible", e);
+      this.db = null;
+      this.failed = true;
       return undefined;
     }
   },
@@ -182,6 +189,7 @@ function renderCapabilities(c) {
   const lines = [];
   if (c.webgpu && c.appleGpu) {
     lines.push(["ok", "Votre Mac peut utiliser sa puce graphique Apple : la transcription sera rapide."]);
+    if (c.safari) lines.push(["info", "Avec Safari, les longs fichiers en « Haute précision » peuvent faire recharger la page. Google Chrome est plus sûr."]);
   } else if (c.webgpu) {
     lines.push(["ok", "La carte graphique est utilisable (WebGPU)."]);
     if (c.mac) lines.push(["info", "Sur un Mac Intel, le mode « Équilibré » est conseillé. Pour de très longs fichiers, le mode Google Colab (plus bas) sera plus rapide."]);
@@ -197,14 +205,17 @@ function renderCapabilities(c) {
 }
 
 function recommendedModel(c) {
-  if (c.webgpu && c.appleGpu) return "turbo";
+  // Safari recharge les pages trop gourmandes en mémoire : modèle plus léger.
+  if (c.webgpu && c.appleGpu && !c.safari) return "turbo";
+  if (c.webgpu && c.appleGpu) return "small";
   if (c.webgpu) return "small";
   return "base";
 }
 
-function modelSpec(key) {
+function modelSpec(key, { forceCpu = false } = {}) {
+  const device = state.caps.webgpu && !forceCpu ? "webgpu" : "wasm";
+  if (MODELS[key].gpuOnly && device === "wasm") key = "small";
   const m = MODELS[key];
-  const device = state.caps.webgpu ? "webgpu" : "wasm";
   let dtype;
   if (device === "wasm") dtype = "q8";
   else if (key === "turbo") dtype = { encoder_model: state.caps.f16 ? "fp16" : "q4", decoder_model_merged: "q4" };
@@ -228,8 +239,8 @@ function renderModelChoices() {
     const disabled = m.gpuOnly && !state.caps.webgpu;
     const size = key === "turbo" ? SIZES.turbo[state.caps.f16 ? "fp16" : "q4"] : SIZES[key][state.caps.webgpu ? "webgpu" : "wasm"];
     const desc = {
-      turbo: "La meilleure qualité. Idéal sur Mac avec puce Apple (M1, M2, M3, M4…).",
-      small: "Bon compromis vitesse / qualité, pour les Mac plus anciens.",
+      turbo: "La meilleure qualité. Pour Mac avec puce Apple et 16 Go de mémoire ou plus (menu Pomme → À propos de ce Mac). Avec 8 Go, choisissez « Équilibré ».",
+      small: "Bon compromis vitesse / qualité. Conseillé avec 8 Go de mémoire ou sur les Mac plus anciens.",
       base: "Le plus rapide, mais plus d'erreurs. À réserver aux ordinateurs lents.",
     }[key];
     return `<label class="choice${disabled ? " disabled" : ""}">
@@ -262,8 +273,11 @@ async function audioElementDuration(file) {
   }
 }
 
+let chooseSeq = 0;
 async function chooseFile(file) {
   if (!file || state.running) return;
+  const seq = ++chooseSeq;
+  const stale = () => seq !== chooseSeq || state.running;
   state.file = file;
   state.info = null;
   $("fileName").textContent = file.name;
@@ -283,11 +297,13 @@ async function chooseFile(file) {
       probe.terminate();
     }
   }
+  if (stale()) return;
   if (info.path === "none") {
     $("fileMeta").textContent = "Ce fichier ne contient pas de piste audio.";
     return;
   }
   if (info.path === "whole") info.duration = await audioElementDuration(file);
+  if (stale()) return;
   state.info = info;
   const mb = (file.size / 1048576).toFixed(file.size > 104857600 ? 0 : 1).replace(".", ",");
   let meta = `${mb} Mo` + (info.duration ? ` · ${formatDuration(info.duration)}` : "");
@@ -381,19 +397,25 @@ function downloadProgress(ev) {
   }
 }
 
-async function loadAsr(spec) {
-  setStage("Chargement du modèle de reconnaissance vocale…");
-  setProgress(0, "");
+const NETWORK_ERROR = /fetch|network|Failed to load|NetworkError|load failed|Could not locate|ERR_|s'est arrêté/i;
+
+/** Charge le moteur. `quiet` : rechargement en cours de route (le modèle vient du cache). */
+async function loadAsr(spec, { quiet = false } = {}) {
+  if (!quiet) {
+    setStage("Chargement du modèle de reconnaissance vocale…");
+    setProgress(0, "");
+  }
+  const onProgress = quiet ? null : downloadProgress;
   try {
-    return { client: await createAsr(spec, downloadProgress), spec };
+    return { client: await createAsr(spec, onProgress), spec };
   } catch (e) {
-    if (spec.device !== "webgpu" || state.cancel) throw e;
-    // La carte graphique a échoué : on retente sur le processeur avec un modèle plus léger.
+    // Problème de réseau : inutile de changer de moteur, on laisse l'erreur remonter.
+    if (spec.device !== "webgpu" || state.cancel || NETWORK_ERROR.test(e.message)) throw e;
+    // La carte graphique a échoué : on retente sur le processeur, pour cette transcription seulement.
     console.warn("WebGPU indisponible, repli WebAssembly", e);
     notice(`La carte graphique n'a pas pu être utilisée (${e.message}). Passage au processeur, plus lent.`);
-    state.caps.webgpu = false;
-    const fallback = modelSpec(spec.key === "turbo" ? "small" : spec.key);
-    return { client: await createAsr(fallback, downloadProgress), spec: fallback };
+    const fallback = modelSpec(spec.key, { forceCpu: true });
+    return { client: await createAsr(fallback, onProgress), spec: fallback };
   }
 }
 
@@ -410,7 +432,21 @@ async function run() {
   const key = `${fileKey(file)}|${modelKey}`;
   const languageChoice = $("language").value;
   const multilingual = $("multilingual").checked;
-  const saved = !$("resume").hidden && $("resumeCheck").checked ? await store.get(key) : null;
+  // Reprise automatique d'un travail interrompu, sauf si l'utilisateur a décoché la case.
+  const rec = await store.get(key);
+  const declined = !$("resume").hidden && !$("resumeCheck").checked;
+  let saved = rec && !rec.done && rec.seek > 0 && !declined ? rec : null;
+  let restartNotice = "";
+  if (saved && (!!saved.multilingual !== multilingual ||
+      (languageChoice !== "auto" && !multilingual && saved.language !== languageChoice))) {
+    saved = null; // réglages de langue changés : on repart du début
+    restartNotice = "Réglage de langue modifié : la transcription repart du début.";
+  }
+  if (rec?.done) {
+    // Une transcription terminée de ce fichier est conservée à part dans l'historique.
+    await store.put({ ...rec, key: `${key}|${rec.updatedAt}` });
+    await store.del(key);
+  }
 
   state.running = true;
   state.cancel = false;
@@ -420,7 +456,7 @@ async function run() {
   $("progressCard").hidden = false;
   $("hiddenWarning").hidden = true;
   $("live").innerHTML = "";
-  notice("");
+  notice(restartNotice);
   keepAwake();
   $("progressCard").scrollIntoView({ behavior: "smooth", block: "start" });
 
@@ -449,15 +485,23 @@ async function run() {
       duration = source.duration;
     }
     await source.open(seekS);
+    const checkCancel = () => { if (state.cancel) throw new Error("CANCELLED"); };
+    checkCancel();
     const buffer = new PcmBuffer(Math.round(seekS * SR));
     let eof = false;
     const fill = async (untilSample) => {
       while (!eof && buffer.end < untilSample) {
-        const { pcm, eof: done } = await source.pull(60);
+        const { pcm, eof: done, damaged } = await source.pull(60);
+        checkCancel();
         buffer.append(pcm);
         eof = done;
+        if (damaged && !damagedWarned) {
+          damagedWarned = true;
+          notice("Une partie du fichier est abîmée : elle a été sautée.");
+        }
       }
     };
+    let damagedWarned = false;
 
     // 2. Modèle
     ({ client: asr, spec } = await loadAsr(spec));
@@ -501,6 +545,7 @@ async function run() {
     let windowsDone = 0;
     let slowWarned = false;
     let avgMs = 0; // durée moyenne d'une fenêtre (pour le délai de garde)
+    let saveWarned = false;
     while (!state.cancel) {
       const startSample = Math.round(seekS * SR);
       await fill(startSample + WINDOW_S * SR);
@@ -519,16 +564,17 @@ async function run() {
         }
         let out;
         try {
-          out = await asr.call("transcribe", { pcm, language: lang }, [], windowTimeout(avgMs));
+          out = await asr.call("transcribe", { pcm, language: lang, simple: params.has("simple") }, [], windowTimeout(avgMs));
         } catch (e) {
           if (state.cancel) throw e;
-          // Le moteur a planté ou bloqué (mémoire GPU…) : on le redémarre et on retente une fois.
+          // Le moteur a planté ou bloqué (mémoire GPU, boucle de la bibliothèque…) : on le
+          // redémarre et on retente une fois en mode simple (un seul passage, longueur bornée).
           console.warn("Nouvel essai après erreur", e);
           asr.terminate();
           setStage("Redémarrage du moteur…");
-          ({ client: asr } = await loadAsr(spec));
+          ({ client: asr, spec } = await loadAsr(spec, { quiet: true }));
           setStage("Transcription en cours…");
-          out = await asr.call("transcribe", { pcm, language: lang }, [], windowTimeout(0));
+          out = await asr.call("transcribe", { pcm, language: lang, simple: true }, [], windowTimeout(avgMs));
         }
         avgMs = avgMs ? 0.8 * avgMs + 0.2 * out.ms : out.ms;
         const merged = mergeWindow(out.chunks, seekS, lenS, isLast);
@@ -569,8 +615,12 @@ async function run() {
         // Libère complètement la mémoire GPU en recréant le moteur (le modèle vient du cache).
         asr.terminate();
         setStage("Rafraîchissement du moteur (quelques secondes)…");
-        ({ client: asr } = await loadAsr(spec));
+        ({ client: asr, spec } = await loadAsr(spec, { quiet: true }));
         setStage("Transcription en cours…");
+      }
+      if (store.failed && !saveWarned) {
+        saveWarned = true;
+        notice("La sauvegarde automatique ne fonctionne pas (disque plein ou navigation privée) : gardez cette page ouverte jusqu'à la fin.");
       }
     }
     if (state.cancel) throw new Error("CANCELLED");
@@ -594,7 +644,7 @@ async function run() {
       // Relance demandée (changement de langue) : pas de message d'arrêt.
     } else if (e.message === "CANCELLED" || state.cancel) {
       setStage("Transcription arrêtée.");
-      notice("Le travail déjà fait est gardé : rechoisissez le même fichier pour reprendre.");
+      notice("Le travail déjà fait est gardé : cliquez sur « Lancer la transcription » pour reprendre.");
     } else {
       console.error(e);
       setStage("Une erreur est survenue.");
@@ -618,6 +668,10 @@ async function run() {
       $("multilingual").checked = false;
       $("resume").hidden = true;
       run();
+    } else {
+      // Montre la case « Reprendre » et l'historique à jour pour le prochain clic.
+      renderHistory();
+      await updateResumeHint();
     }
   }
 }
@@ -636,7 +690,7 @@ function friendlyError(e) {
     return "Ce fichier n'a pas pu être lu. Essayez un autre format (MP3, M4A, WAV) ou Google Chrome.";
   if (/memory|allocation|OOM|device lost|lost/i.test(m))
     return "Le Mac a manqué de mémoire. Fermez les autres applications et relancez (la transcription reprendra où elle s'était arrêtée), ou choisissez un mode plus léger.";
-  if (/TIMEOUT/.test(m))
+  if (/TIMEOUT/.test(m) || /CANCELLED/.test(m))
     return "Le moteur ne répond plus. Relancez : la transcription reprendra où elle s'était arrêtée.";
   return `Erreur : ${m}. Relancez : la transcription reprendra où elle s'était arrêtée.`;
 }
@@ -708,12 +762,16 @@ async function init() {
   renderCapabilities(state.caps);
   renderModelChoices();
   renderHistory();
-  try { await navigator.storage?.persist?.(); } catch {}
+  navigator.storage?.persist?.()?.catch?.(() => {}); // sans attendre : ne doit pas bloquer la page
 
   const drop = $("drop"), input = $("file");
   drop.onclick = () => !state.running && input.click();
   drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
-  input.onchange = () => chooseFile(input.files[0]);
+  input.onchange = () => {
+    const f = input.files[0];
+    input.value = ""; // permet de rechoisir le même fichier
+    chooseFile(f);
+  };
   for (const ev of ["dragenter", "dragover"]) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); });
   for (const ev of ["dragleave", "drop"]) drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); });
   drop.addEventListener("drop", (e) => chooseFile(e.dataTransfer.files[0]));

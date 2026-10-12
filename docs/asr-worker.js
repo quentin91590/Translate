@@ -98,16 +98,27 @@ async function detect({ pcm }) {
     max_new_tokens: 1,
     logits_processor: [probe],
   });
-  const probs = langs
-    .map(([token], i) => [token.replace(/^<\|/, "").replace(/\|>$/, ""), probe.scores[i]])
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8);
+  // Transformers.js n'accepte pas « yue » (cantonais) : on l'ajoute au chinois.
+  const merged = new Map();
+  langs.forEach(([token], i) => {
+    const code = toSupported(token.replace(/^<\|/, "").replace(/\|>$/, ""));
+    merged.set(code, (merged.get(code) || 0) + probe.scores[i]);
+  });
+  const probs = [...merged.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
   return { probs, gpu: gpuStats.live };
 }
 
-async function transcribe({ pcm, language }) {
+const toSupported = (code) => (code === "yue" ? "zh" : code);
+
+/**
+ * `simple` : un seul passage de décodage de longueur bornée, sans la boucle interne de
+ * la bibliothèque (utilisé pour retenter une fenêtre qui a bloqué ou planté).
+ */
+async function transcribe({ pcm, language, simple = false }) {
   const t0 = performance.now();
-  const out = await asr(pcm, { language, task: "transcribe", return_timestamps: true });
+  const options = { language: toSupported(language), task: "transcribe", return_timestamps: true };
+  if (simple) options.max_new_tokens = 440; // Whisper : 448 jetons au plus, préfixe compris
+  const out = await asr(pcm, options);
   return {
     chunks: (out.chunks || []).map((c) => ({ text: c.text, timestamp: c.timestamp })),
     text: out.text,
