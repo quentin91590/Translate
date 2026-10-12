@@ -110,6 +110,7 @@ if (process.env.SCENARIO === "resume") {
   await page.waitForFunction(() => !document.getElementById("resume").hidden, null, { timeout: 30000 });
   resumeInfo = { stageAfterCancel: await page.locator("#stage").innerText(), linesBefore: before, resumeText: await page.locator("#resumeText").innerText() };
   await page.click("#start");
+  await page.waitForFunction(() => document.body.classList.contains("running"), null, { timeout: 60000 });
   await page.waitForFunction(() => document.querySelectorAll("#live p").length > 0, null, { timeout: 60000 });
   resumeInfo.firstLineAfterResume = await page.locator("#live p").first().innerText();
 }

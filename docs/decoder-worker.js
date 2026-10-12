@@ -23,6 +23,7 @@ let trackEnd = null; // fin de la piste (s, horloge du fichier)
 let eof = false;
 let recoveries = 0;
 let damaged = false;
+let trackStart = 0; // début de la piste sur l'horloge du fichier
 let mono = new Float32Array(0);
 let plane = new Float32Array(0);
 
@@ -82,6 +83,7 @@ async function open(file, startSec) {
   input = inp;
   const { start, end } = await trackBounds(inp, track);
   trackEnd = end;
+  trackStart = start;
   sink = new AudioSampleSink(track);
   cursor = start + Math.max(0, startSec);
   recoveries = 0;
@@ -131,6 +133,7 @@ async function pull(seconds) {
   const want = Math.round(seconds * SR);
   const parts = [carry];
   let have = carry.length;
+  let truncatedAt = null;
   damaged = false;
   while (have < want && !eof) {
     let next;
@@ -143,7 +146,10 @@ async function pull(seconds) {
     }
     if (next.done) {
       // La piste s'arrête bien avant la fin annoncée : demuxeur bloqué sur une zone abîmée.
-      if (trackEnd != null && trackEnd - cursor > 2 && recover()) continue;
+      if (trackEnd != null && trackEnd - cursor > 2) {
+        if (recover()) continue;
+        truncatedAt = cursor - trackStart; // impossible d'aller plus loin
+      }
       eof = true;
       if (resampler) { const tail = resampler.flush(); parts.push(tail); have += tail.length; resampler = null; }
       break;
@@ -180,7 +186,7 @@ async function pull(seconds) {
   const all = concatAll(parts);
   const pcm = all.length > want ? all.slice(0, want) : all;
   carry = all.length > want ? all.slice(want) : new Float32Array(0);
-  return { pcm, eof: eof && carry.length === 0, damaged };
+  return { pcm, eof: eof && carry.length === 0, damaged, truncatedAt: carry.length ? null : truncatedAt };
 }
 
 self.onmessage = async ({ data }) => {

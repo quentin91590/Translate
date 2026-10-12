@@ -426,6 +426,10 @@ function notice(text) {
 }
 
 async function run() {
+  // Marqué « en cours » avant toute attente : un double-clic ne lance pas deux transcriptions.
+  state.running = true;
+  state.cancel = false;
+  document.body.classList.add("running");
   const file = state.file;
   const info = state.info;
   const modelKey = selectedModel();
@@ -448,10 +452,7 @@ async function run() {
     await store.del(key);
   }
 
-  state.running = true;
-  state.cancel = false;
   state.result = null;
-  document.body.classList.add("running");
   $("result").hidden = true;
   $("progressCard").hidden = false;
   $("hiddenWarning").hidden = true;
@@ -491,17 +492,38 @@ async function run() {
     let eof = false;
     const fill = async (untilSample) => {
       while (!eof && buffer.end < untilSample) {
-        const { pcm, eof: done, damaged } = await source.pull(60);
+        const { pcm, eof: done, damaged, truncatedAt } = await source.pull(60);
         checkCancel();
         buffer.append(pcm);
         eof = done;
-        if (damaged && !damagedWarned) {
+        if (truncatedAt != null && source instanceof StreamSource) {
+          // Zone abîmée que la lecture en flux ne sait pas franchir : on bascule sur le
+          // décodeur intégré du navigateur, plus tolérant, à partir du même endroit.
+          const at = buffer.end / SR;
+          notice(`Une zone abîmée du fichier (vers ${clock(at)}) est contournée…`);
+          try {
+            const whole = await WholeSource.create(file);
+            checkCancel();
+            await whole.open(at);
+            source.close();
+            source = whole;
+            duration = duration || whole.duration;
+            eof = whole.pos >= whole.data.length;
+            notice(`Une zone abîmée du fichier (vers ${clock(at)}) a été contournée.`);
+          } catch (err) {
+            if (state.cancel) throw err;
+            console.warn("Décodage de secours impossible", err);
+            truncated = at;
+            notice(`Le fichier est abîmé à partir de ${clock(at)} : la transcription s'arrête là. Essayez de le convertir en MP3 ou WAV.`);
+          }
+        } else if (damaged && !damagedWarned) {
           damagedWarned = true;
-          notice("Une partie du fichier est abîmée : elle a été sautée.");
+          notice("Un court passage abîmé du fichier a été sauté.");
         }
       }
     };
     let damagedWarned = false;
+    let truncated = null; // instant où la lecture a dû s'arrêter (fichier abîmé)
 
     // 2. Modèle
     ({ client: asr, spec } = await loadAsr(spec));
@@ -632,6 +654,7 @@ async function run() {
       language: multilingual ? mostFrequentLanguage(segments) : language,
       language_probability: multilingual ? null : languageProb,
       duration,
+      incomplete_after: truncated,
       segments,
     };
     await store.put({ ...record(), seek: duration, done: true, result });
