@@ -1,7 +1,7 @@
 // Chef d'orchestre de la page : lecture du fichier, chargement du modèle,
 // détection de la langue, boucle de transcription, sauvegarde et exports.
 import {
-  SR, WINDOW_S, mergeWindow, isHallucination, isSilent, speechScore,
+  SR, WINDOW_S, mergeWindow, isHallucination, isRepeatLoop, isSilent, pickLanguageWindows,
   combineLanguageVotes, formatDuration, PcmBuffer,
 } from "./core.js";
 import { FORMATS, MIME } from "./formats.js";
@@ -467,25 +467,32 @@ async function run() {
     if (!language && !multilingual) {
       setStage("Détection de la langue…");
       setProgress(0, "");
-      await fill(buffer.start + 300 * SR); // regarde les 5 premières minutes
+      // Les 5 passages les plus parlés des 10 premières minutes votent.
+      await fill(buffer.start + 600 * SR);
       const windows = [];
       for (let s = buffer.start; s < buffer.end; s += WINDOW_S * SR) {
         const pcm = buffer.slice(s, s + WINDOW_S * SR);
-        windows.push({ pcm, score: speechScore(pcm) });
+        windows.push({ pcm, full: pcm.length === WINDOW_S * SR });
       }
-      const best = windows.filter((w) => w.score > 0).sort((a, b) => b.score - a.score).slice(0, 3);
+      const chosen = pickLanguageWindows(windows, 5);
       const votes = [];
-      for (const w of best.length ? best : windows.slice(0, 1)) {
+      for (const [i, w] of chosen.entries()) {
+        setProgress(i / chosen.length, `Écoute du passage ${i + 1} sur ${chosen.length}…`);
         const r = await asr.call("detect", { pcm: w.pcm }, [], windowTimeout(0));
         votes.push(r.probs);
       }
       const ranking = combineLanguageVotes(votes);
       [language, languageProb] = ranking[0] || ["en", null];
-      if (DEBUG) console.log("langues", ranking.slice(0, 5));
+      if (DEBUG) console.log("langues", JSON.stringify(votes.map((v) => v.slice(0, 3))), JSON.stringify(ranking.slice(0, 5)));
     }
     $("langInfo").textContent = multilingual
       ? "Langue : détectée à chaque passage (mode multilingue)"
-      : `Langue : ${langName(language)}${languageProb != null ? ` (${Math.round(languageProb * 100)} %)` : ""}`;
+      : `Langue : ${langName(language)}${languageProb != null ? ` (sûr à ${Math.round(languageProb * 100)} %)` : ""}`;
+    state.language = language;
+    $("langFix").hidden = multilingual;
+    if (!multilingual && languageProb != null && languageProb < 0.7) {
+      notice(`La langue n'est pas certaine. Si le texte qui apparaît n'est pas en ${langName(language).toLowerCase()}, cliquez sur « Pas la bonne langue ? ».`);
+    }
 
     // 4. Transcription fenêtre par fenêtre
     setStage("Transcription en cours…");
@@ -525,10 +532,13 @@ async function run() {
         }
         avgMs = avgMs ? 0.8 * avgMs + 0.2 * out.ms : out.ms;
         const merged = mergeWindow(out.chunks, seekS, lenS, isLast);
-        const fresh = merged.segments
-          .filter((s) => !isHallucination(s.text))
-          .map((s) => (multilingual ? { ...s, language: lang } : s));
-        segments.push(...fresh);
+        const fresh = [];
+        for (const s of merged.segments) {
+          if (isHallucination(s.text) || isRepeatLoop(s.text, segments)) continue;
+          const seg = multilingual ? { ...s, language: lang } : s;
+          segments.push(seg);
+          fresh.push(seg);
+        }
         appendLive(fresh);
         advance = merged.advance;
         if (DEBUG) {
@@ -580,7 +590,9 @@ async function run() {
     setProgress(1, `Transcription terminée en ${formatDuration((performance.now() - t0) / 1000)}.`);
     renderHistory();
   } catch (e) {
-    if (e.message === "CANCELLED" || state.cancel) {
+    if (state.restart) {
+      // Relance demandée (changement de langue) : pas de message d'arrêt.
+    } else if (e.message === "CANCELLED" || state.cancel) {
       setStage("Transcription arrêtée.");
       notice("Le travail déjà fait est gardé : rechoisissez le même fichier pour reprendre.");
     } else {
@@ -595,6 +607,18 @@ async function run() {
     document.body.classList.remove("running");
     try { await wakeLock?.release(); } catch {}
     wakeLock = null;
+    $("langFix").hidden = true;
+    $("langPick").hidden = true;
+    if (state.restart) {
+      // Recommence depuis le début avec la langue choisie par l'utilisateur.
+      const { language: forced } = state.restart;
+      state.restart = null;
+      await store.del(key);
+      $("language").value = forced;
+      $("multilingual").checked = false;
+      $("resume").hidden = true;
+      run();
+    }
   }
 }
 
@@ -695,6 +719,25 @@ async function init() {
   drop.addEventListener("drop", (e) => chooseFile(e.dataTransfer.files[0]));
 
   $("start").onclick = () => !state.running && state.file && state.info && run();
+  // Correction de la langue pendant la transcription.
+  $("langSelect").innerHTML = [...$("language").options]
+    .filter((o) => o.value !== "auto")
+    .map((o) => `<option value="${o.value}">${o.textContent}</option>`)
+    .join("");
+  $("langFix").onclick = () => {
+    if (state.language && [...$("langSelect").options].some((o) => o.value === state.language)) {
+      $("langSelect").value = state.language;
+    }
+    $("langFix").hidden = true;
+    $("langPick").hidden = false;
+  };
+  $("langApply").onclick = () => {
+    if (!state.running) return;
+    state.restart = { language: $("langSelect").value };
+    state.cancel = true;
+    setStage("Redémarrage dans la langue choisie…");
+    state.asr?.terminate();
+  };
   $("cancel").onclick = () => {
     if (!state.running) return;
     state.cancel = true;

@@ -81,6 +81,20 @@ export function isHallucination(text) {
   return false;
 }
 
+const normalize = (t) => (t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+/**
+ * Vrai si le segment répète mot pour mot les deux précédents : boucle de Whisper
+ * (« Merci. Merci. Merci. … »). Les deux premières occurrences sont gardées.
+ * @param {string} text
+ * @param {{text: string}[]} previous segments déjà gardés
+ */
+export function isRepeatLoop(text, previous) {
+  const n = normalize(text);
+  if (!n || previous.length < 2) return false;
+  return previous.slice(-2).every((s) => normalize(s.text) === n);
+}
+
 /** Niveau sonore maximal par trames de 0,5 s (RMS linéaire). */
 export function frameLevels(pcm, frame = SR / 2) {
   const out = [];
@@ -95,10 +109,13 @@ export function frameLevels(pcm, frame = SR / 2) {
 
 const DB = (db) => Math.pow(10, db / 20);
 
-/** Vrai si la fenêtre ne contient aucun son au-dessus de -50 dBFS : on peut la sauter. */
+/**
+ * Vrai si la fenêtre ne contient aucun son au-dessus de -60 dBFS : on peut la sauter.
+ * Seuil volontairement bas : un enregistrement lointain peut avoir sa parole vers -50 dBFS.
+ */
 export function isSilent(pcm) {
   const levels = frameLevels(pcm);
-  return levels.length === 0 || Math.max(...levels) < DB(-50);
+  return levels.length === 0 || Math.max(...levels) < DB(-60);
 }
 
 /** Part des trames de 0,5 s avec un niveau « parole probable » (> -40 dBFS). */
@@ -108,10 +125,41 @@ export function speechScore(pcm) {
   return levels.filter((l) => l > DB(-40)).length / levels.length;
 }
 
-/** Additionne les probabilités de langue de plusieurs fenêtres et renvoie le classement. */
+/** Niveau sonore « typique » d'une fenêtre : médiane des niveaux par 0,5 s, en dB. */
+export function windowLoudness(pcm) {
+  const levels = frameLevels(pcm).sort((a, b) => a - b);
+  if (!levels.length) return -Infinity;
+  return 20 * Math.log10(levels[Math.floor(levels.length / 2)] + 1e-9);
+}
+
+/**
+ * Choisit les fenêtres les plus « parlées » pour détecter la langue : fenêtres complètes
+ * de préférence (une fenêtre courte est complétée par du silence, ce qui pousse Whisper
+ * vers l'anglais), classées par niveau médian — un seuil relatif, donc valable aussi pour
+ * les enregistrements faibles.
+ * @param {{pcm: Float32Array, full: boolean}[]} windows
+ */
+export function pickLanguageWindows(windows, count = 5) {
+  const audible = windows.filter((w) => !isSilent(w.pcm));
+  const full = audible.filter((w) => w.full);
+  const pool = full.length ? full : audible.length ? audible : windows.slice(0, 1);
+  return pool
+    .map((w) => ({ ...w, loudness: windowLoudness(w.pcm) }))
+    .sort((a, b) => b.loudness - a.loudness)
+    .slice(0, count);
+}
+
+/**
+ * Combine les probabilités de langue de plusieurs fenêtres. Chaque fenêtre pèse autant que
+ * sa confiance (probabilité de sa langue favorite) : une fenêtre sûre à 97 % compte bien plus
+ * qu'une fenêtre hésitante (peu de parole, bruit), qui penche souvent vers l'anglais par défaut.
+ */
 export function combineLanguageVotes(votes) {
   const total = new Map();
-  for (const v of votes) for (const [code, p] of v) total.set(code, (total.get(code) || 0) + p);
+  for (const v of votes) {
+    const weight = v[0]?.[1] ?? 0;
+    for (const [code, p] of v) total.set(code, (total.get(code) || 0) + weight * p);
+  }
   const sum = [...total.values()].reduce((a, b) => a + b, 0) || 1;
   return [...total.entries()].map(([c, p]) => [c, p / sum]).sort((a, b) => b[1] - a[1]);
 }

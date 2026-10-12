@@ -3,6 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SR, mergeWindow, isHallucination, isSilent, speechScore, combineLanguageVotes, formatDuration, PcmBuffer,
+  pickLanguageWindows, isRepeatLoop,
 } from "../../docs/core.js";
 import { StreamingResampler } from "../../docs/resampler.js";
 import { toSrt, toVtt, toTxt, toJson } from "../../docs/formats.js";
@@ -64,14 +65,39 @@ test("isSilent / speechScore", () => {
   const tone = silence.map((_, i) => 0.3 * Math.sin(i / 10));
   assert.ok(!isSilent(tone));
   assert.equal(speechScore(tone), 1);
-  const quiet = silence.map((_, i) => 0.001 * Math.sin(i / 10)); // -63 dBFS
+  const quiet = silence.map((_, i) => 0.0008 * Math.sin(i / 10)); // ≈ -65 dBFS : bruit de fond
   assert.ok(isSilent(quiet));
+  const distant = silence.map((_, i) => 0.004 * Math.sin(i / 10)); // ≈ -51 dBFS : parole lointaine
+  assert.ok(!isSilent(distant));
 });
 
-test("combineLanguageVotes", () => {
-  const r = combineLanguageVotes([[["fr", 0.9], ["en", 0.1]], [["fr", 0.6], ["en", 0.4]], [["en", 0.7], ["fr", 0.3]]]);
+test("combineLanguageVotes: les fenêtres sûres d'elles l'emportent", () => {
+  // Cas réel observé : fenêtre pleine de français (97 %) + fenêtres pauvres qui hésitent vers l'anglais.
+  const r = combineLanguageVotes([
+    [["fr", 0.97], ["en", 0.013]],
+    [["en", 0.39], ["fr", 0.18]],
+    [["en", 0.41], ["fr", 0.2]],
+  ]);
   assert.equal(r[0][0], "fr");
-  assert.ok(Math.abs(r[0][1] - 0.6) < 1e-9);
+  assert.ok(r[0][1] > 0.75, `confiance ${r[0][1]}`);
+  const sum = r.reduce((a, [, p]) => a + p, 0);
+  assert.ok(Math.abs(sum - 1) < 1e-9);
+});
+
+test("pickLanguageWindows: fenêtres complètes et les plus fortes, seuil relatif", () => {
+  const tone = (amp, n = SR * 30) => Float32Array.from({ length: n }, (_, i) => amp * Math.sin(i / 7));
+  const windows = [
+    { pcm: new Float32Array(SR * 30), full: true, id: "silence" },
+    { pcm: tone(0.004), full: true, id: "faible" },      // ≈ -51 dBFS : enregistrement lointain
+    { pcm: tone(0.008), full: true, id: "moyen" },
+    { pcm: tone(0.3, SR * 10), full: false, id: "court-fort" },
+  ];
+  const picked = pickLanguageWindows(windows, 2).map((w) => w.id);
+  assert.deepEqual(picked, ["moyen", "faible"]);
+  // Seulement des fenêtres courtes : on les prend quand même.
+  assert.deepEqual(pickLanguageWindows([windows[3]], 5).map((w) => w.id), ["court-fort"]);
+  // Tout est silencieux : on garde la première fenêtre.
+  assert.deepEqual(pickLanguageWindows([windows[0]], 5).map((w) => w.id), ["silence"]);
 });
 
 test("formatDuration", () => {
@@ -114,4 +140,11 @@ test("formats", () => {
   assert.match(toSrt(t), /^1\n00:00:00,000 --> 00:00:02,500\nBonjour\.\n\n2\n01:01:01,200 --> 01:01:05,040\nFin\.\n$/);
   assert.match(toVtt(t), /^WEBVTT\n\n00:00:00\.000 --> 00:00:02\.500\nBonjour\./);
   assert.equal(JSON.parse(toJson(t)).text, "Bonjour.\nFin.");
+});
+
+test("isRepeatLoop: 3e répétition identique supprimée", () => {
+  const prev = [{ text: "Bonjour." }, { text: "No se puede ser muy bien," }, { text: "no se puede ser muy bien" }];
+  assert.ok(isRepeatLoop("No se puede, ser muy bien.", prev));
+  assert.ok(!isRepeatLoop("Autre chose.", prev));
+  assert.ok(!isRepeatLoop("Oui.", [{ text: "Oui." }])); // deux occurrences restent permises
 });

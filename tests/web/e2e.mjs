@@ -113,6 +113,18 @@ if (process.env.SCENARIO === "resume") {
   await page.click("#start");
 }
 
+let langFixInfo = null;
+if (process.env.SCENARIO === "langfix") {
+  // Après la première fenêtre, l'utilisateur corrige la langue : la page doit tout relancer.
+  await page.waitForFunction(() => /fenêtre 1 /.test(document.getElementById("debug").textContent), null, { timeout: TIMEOUT });
+  const detected = await page.locator("#langInfo").innerText();
+  await page.click("#langFix");
+  await page.selectOption("#langSelect", process.env.FIX_LANGUAGE || "es");
+  await page.click("#langApply");
+  await page.waitForFunction(() => /Espagnol|Anglais|Allemand|Italien/.test(document.getElementById("langInfo").textContent), null, { timeout: TIMEOUT });
+  langFixInfo = { detected, after: await page.locator("#langInfo").innerText() };
+}
+
 let outcome = "timeout";
 let last = null;
 const debugLines = [];
@@ -148,7 +160,7 @@ if (result) {
 }
 
 const report = {
-  outcome, resumeInfo, last: outcome === "done" ? undefined : last, seconds: Math.round((Date.now() - t0) / 1000), caps, fileMeta, result,
+  outcome, resumeInfo, langFixInfo, last: outcome === "done" ? undefined : last, seconds: Math.round((Date.now() - t0) / 1000), caps, fileMeta, result,
   srtHead: srt?.split("\n").slice(0, 8).join("\n"),
   gpu: debugLines.slice(-3), gpuSeries: debugLines.map((l) => /GPU (\d+) Mo/.exec(l)?.[1]).filter(Boolean).map(Number),
   requests: [...new Set(requests)],

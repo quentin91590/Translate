@@ -86,6 +86,9 @@
   details p, details ol { color: var(--muted); font-size: 15px; margin: 8px 0 0; }
   a { color: var(--accent); }
   .debug { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); margin-top: 10px; }
+  .lang-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 4px; }
+  .lang-row select { width: auto; padding: 4px 8px; font-size: 14px; }
+  .link { background: none; padding: 0; color: var(--accent); text-decoration: underline; font-size: 14px; }
   footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 30px; }
   body.running #setup { opacity: .55; pointer-events: none; }
   body:not(.ready) #start { visibility: hidden; }
@@ -159,7 +162,14 @@
     </div>
     <div class="bar"><div id="bar"></div></div>
     <div class="meta" id="detail"></div>
-    <div class="meta" id="langInfo"></div>
+    <div class="meta lang-row">
+      <span id="langInfo"></span>
+      <button type="button" class="link" id="langFix" hidden>Pas la bonne langue ?</button>
+      <span id="langPick" hidden>
+        <select id="langSelect" aria-label="Langue parlée"></select>
+        <button type="button" class="small" id="langApply">Recommencer dans cette langue</button>
+      </span>
+    </div>
     <div class="notice" id="hiddenWarning" hidden>Gardez cet onglet affiché au premier plan : le navigateur ralentit les onglets cachés.</div>
     <div class="notice" id="notice" hidden></div>
     <div class="live" id="live" aria-live="polite"></div>
