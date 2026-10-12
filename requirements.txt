@@ -1,0 +1,5 @@
+# Coeur de l'application + moteur par défaut (Whisper large-v3 via CTranslate2)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+faster-whisper>=1.1

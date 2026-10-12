@@ -1,0 +1,23 @@
+[project]
+name = "transcriber"
+version = "1.0.0"
+description = "Transcription audio longue durée (jusqu'à ~3 h) avec des modèles open source"
+requires-python = ">=3.10"
+dependencies = ["fastapi>=0.110", "uvicorn[standard]>=0.29", "python-multipart>=0.0.9", "faster-whisper>=1.1"]
+
+[project.optional-dependencies]
+qwen = ["qwen-asr"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+transcriber-server = "transcriber.server:main"
+transcriber = "transcriber.cli:main"
+
+[tool.setuptools]
+packages = ["transcriber", "transcriber.backends"]
+
+[tool.setuptools.package-data]
+transcriber = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

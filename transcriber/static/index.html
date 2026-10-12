@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcripteur audio</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1c1f24; --muted: #667085; --border: #e3e6ea;
+    --accent: #2f6fed; --accent-soft: #e6eefe; --ok: #14804a; --err: #c0362c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --card: #1a1d23; --text: #e8eaed; --muted: #9aa3ae; --border: #2b3038;
+            --accent: #6d9bff; --accent-soft: #1d2a45; --ok: #4cc38a; --err: #ff7a6e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .drop { border: 2px dashed var(--border); border-radius: 10px; padding: 32px 16px; text-align: center; cursor: pointer; transition: .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { display: block; font-size: 16px; }
+  .drop span { color: var(--muted); font-size: 13px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 16px; }
+  label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 4px; }
+  select, button { font: inherit; }
+  select { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  .check { display: flex; gap: 8px; align-items: center; margin-top: 12px; font-size: 14px; }
+  button { border: 0; border-radius: 8px; padding: 10px 16px; cursor: pointer; }
+  .primary { background: var(--accent); color: #fff; margin-top: 16px; width: 100%; font-weight: 600; }
+  .primary:disabled { opacity: .5; cursor: default; }
+  .ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); padding: 5px 10px; font-size: 13px; }
+  .job { border-top: 1px solid var(--border); padding: 14px 0; }
+  .job:first-child { border-top: 0; padding-top: 0; }
+  .job-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  .name { font-weight: 600; overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .bar { height: 6px; background: var(--border); border-radius: 3px; margin: 8px 0 4px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .4s; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .badge.done { color: var(--ok); } .badge.error { color: var(--err); }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .actions a { font-size: 13px; color: var(--accent); text-decoration: none; border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; }
+  pre { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 320px; overflow: auto; font: 14px/1.6 system-ui, sans-serif; }
+  .err { color: var(--err); font-size: 13px; }
+  .empty { color: var(--muted); text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Transcripteur audio</h1>
+  <p class="sub">Transcription locale avec des modèles open source — détection automatique de la langue, fichiers jusqu'à ~3 h.</p>
+
+  <section class="card">
+    <div class="drop" id="drop">
+      <strong id="dropTitle">Déposez un fichier audio ou vidéo ici</strong>
+      <span>ou cliquez pour choisir — mp3, wav, m4a, ogg, flac, mp4, webm…</span>
+      <input type="file" id="file" accept="audio/*,video/*" hidden>
+    </div>
+    <div class="row">
+      <div>
+        <label for="backend">Modèle</label>
+        <select id="backend"></select>
+      </div>
+      <div>
+        <label for="language">Langue</label>
+        <select id="language">
+          <option value="">Détection automatique</option>
+          <option value="fr">Français</option><option value="en">Anglais</option>
+          <option value="es">Espagnol</option><option value="de">Allemand</option>
+          <option value="it">Italien</option><option value="pt">Portugais</option>
+          <option value="nl">Néerlandais</option><option value="ar">Arabe</option>
+          <option value="zh">Chinois</option><option value="ja">Japonais</option>
+          <option value="ko">Coréen</option><option value="ru">Russe</option>
+          <option value="tr">Turc</option><option value="pl">Polonais</option>
+          <option value="hi">Hindi</option>
+        </select>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" id="multilingual"> L'enregistrement mélange plusieurs langues</label>
+    <button class="primary" id="send" disabled>Transcrire</button>
+    <div class="bar" id="upBar" hidden><div style="width:0"></div></div>
+    <div class="meta" id="upMsg"></div>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:17px;margin:0 0 12px">Transcriptions</h2>
+    <div id="jobs"><p class="empty">Aucune transcription pour l'instant.</p></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const STATUS = { queued: "En attente", running: "En cours", done: "Terminé", error: "Erreur", cancelled: "Annulé" };
+let selected = null;
+const opened = new Set();
+const previews = {};
+
+function fmtDur(s) {
+  if (s == null) return "";
+  s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h} h ${String(m).padStart(2, "0")}` : `${m} min ${String(sec).padStart(2, "0")} s`;
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+async function loadConfig() {
+  const cfg = await (await fetch("/api/config")).json();
+  $("backend").innerHTML = Object.entries(cfg.backends)
+    .map(([k, v]) => `<option value="${k}" ${k === cfg.default_backend ? "selected" : ""}>${esc(v)}</option>`).join("");
+}
+
+function pick(file) {
+  if (!file) return;
+  selected = file;
+  $("dropTitle").textContent = `${file.name} — ${(file.size / 1048576).toFixed(1)} Mo`;
+  $("send").disabled = false;
+}
+$("drop").onclick = () => $("file").click();
+$("file").onchange = (e) => pick(e.target.files[0]);
+["dragenter", "dragover"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => $("drop").addEventListener(ev, e => { e.preventDefault(); $("drop").classList.remove("over"); }));
+$("drop").addEventListener("drop", e => pick(e.dataTransfer.files[0]));
+
+$("send").onclick = () => {
+  if (!selected) return;
+  const fd = new FormData();
+  fd.append("file", selected);
+  fd.append("backend", $("backend").value);
+  fd.append("language", $("language").value);
+  fd.append("multilingual", $("multilingual").checked);
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", "/api/jobs");
+  $("send").disabled = true; $("upBar").hidden = false;
+  xhr.upload.onprogress = (e) => {
+    if (!e.lengthComputable) return;
+    const p = e.loaded / e.total * 100;
+    $("upBar").firstElementChild.style.width = p + "%";
+    $("upMsg").textContent = `Envoi… ${p.toFixed(0)} %`;
+  };
+  xhr.onload = () => {
+    $("upBar").hidden = true;
+    if (xhr.status === 201) {
+      $("upMsg").textContent = "Fichier envoyé, transcription ajoutée à la file.";
+      selected = null; $("file").value = ""; $("dropTitle").textContent = "Déposez un fichier audio ou vidéo ici";
+      refresh();
+    } else {
+      $("upMsg").textContent = "Erreur : " + xhr.responseText; $("send").disabled = false;
+    }
+  };
+  xhr.onerror = () => { $("upMsg").textContent = "Erreur réseau pendant l'envoi."; $("send").disabled = false; };
+  xhr.send(fd);
+};
+
+function eta(j) {
+  if (j.status !== "running" || !j.started_at || j.progress < 0.02) return "";
+  const elapsed = Date.now() / 1000 - j.started_at;
+  return ` · reste ~${fmtDur(elapsed / j.progress - elapsed)}`;
+}
+
+function renderJob(j) {
+  const pct = Math.round(j.progress * 100);
+  const langs = j.languages && Object.keys(j.languages).length > 1
+    ? " · " + Object.entries(j.languages).map(([k, v]) => `${k} ${Math.round(v * 100)} %`).join(", ") : "";
+  const lang = j.detected_language
+    ? `Langue : ${esc(j.detected_language)}${j.language_probability != null ? ` (${Math.round(j.language_probability * 100)} %)` : ""}${esc(langs)}` : "";
+  let body = "";
+  if (j.status === "running" || j.status === "queued") {
+    body = `<div class="bar"><div style="width:${pct}%"></div></div>
+            <div class="meta">${pct} % · ${esc(j.message)}${eta(j)}</div>
+            <div class="actions"><button class="ghost" data-cancel="${j.id}">Annuler</button></div>`;
+  } else if (j.status === "done") {
+    body = `<div class="meta">${lang}${j.duration ? " · " + fmtDur(j.duration) + " d'audio" : ""}
+            ${j.finished_at && j.started_at ? " · calcul " + fmtDur(j.finished_at - j.started_at) : ""}</div>
+            <div class="actions">
+              ${["txt", "srt", "vtt", "json"].map(f => `<a href="/api/jobs/${j.id}/transcript.${f}" download>${f.toUpperCase()}</a>`).join("")}
+              <button class="ghost" data-toggle="${j.id}">${opened.has(j.id) ? "Masquer" : "Aperçu"}</button>
+              <button class="ghost" data-delete="${j.id}">Supprimer</button>
+            </div>
+            ${opened.has(j.id) ? `<pre>${esc(previews[j.id] ?? "Chargement…")}</pre>` : ""}`;
+  } else {
+    body = `${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
+            <div class="actions"><button class="ghost" data-delete="${j.id}">Supprimer</button></div>`;
+  }
+  return `<div class="job"><div class="job-head"><span class="name">${esc(j.filename)}</span>
+          <span class="badge ${j.status}">${STATUS[j.status] || j.status} · ${esc(j.backend)}</span></div>${body}</div>`;
+}
+
+async function refresh() {
+  try {
+    const jobs = await (await fetch("/api/jobs")).json();
+    $("jobs").innerHTML = jobs.length ? jobs.map(renderJob).join("") : `<p class="empty">Aucune transcription pour l'instant.</p>`;
+  } catch (e) { /* serveur momentanément indisponible */ }
+}
+
+$("jobs").addEventListener("click", async (e) => {
+  const t = e.target;
+  if (t.dataset.cancel) { await fetch(`/api/jobs/${t.dataset.cancel}/cancel`, { method: "POST" }); }
+  if (t.dataset.delete) {
+    if (!confirm("Supprimer cette transcription ?")) return;
+    await fetch(`/api/jobs/${t.dataset.delete}`, { method: "DELETE" });
+  }
+  if (t.dataset.toggle) {
+    const id = t.dataset.toggle;
+    if (opened.has(id)) opened.delete(id);
+    else {
+      opened.add(id);
+      if (!(id in previews)) fetch(`/api/jobs/${id}/transcript.txt`).then(r => r.text()).then(txt => { previews[id] = txt; refresh(); });
+    }
+  }
+  refresh();
+});
+
+loadConfig();
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

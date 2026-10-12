@@ -1,0 +1,2 @@
+# Moteur optionnel Qwen3-ASR (nécessite un GPU NVIDIA recommandé)
+qwen-asr
